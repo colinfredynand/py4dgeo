@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.10)
 
 # Set a name and a version number for your project:
 project(
@@ -44,7 +44,7 @@ endif()
 
 # Compile the library
 add_library(py4dgeo lib/directions.cpp lib/distances.cpp lib/epoch.cpp
-                    lib/kdtree.cpp lib/registration.cpp lib/segmentation.cpp)
+                    lib/kdtree.cpp lib/registration.cpp lib/segmentation.cpp lib/octree.cpp)
 target_include_directories(
   py4dgeo PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/ext/eigen
                  ${CMAKE_SOURCE_DIR}/ext/nanoflann/include)
