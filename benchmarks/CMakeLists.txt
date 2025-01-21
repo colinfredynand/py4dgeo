@@ -16,6 +16,10 @@ add_executable(octree_b octree_b.cpp)
 target_link_libraries(octree_b PUBLIC benchmark::benchmark py4dgeo_test)
 add_test(NAME octree_b COMMAND octree_b)
 
+add_executable(kdtree_b kdtree_b.cpp)
+target_link_libraries(kdtree_b PUBLIC benchmark::benchmark py4dgeo_test)
+add_test(NAME kdtree_b COMMAND kdtree_b)
+
 add_executable(scaling scaling.cpp)
 target_link_libraries(scaling PUBLIC benchmark::benchmark py4dgeo_test)
 add_test(NAME scaling COMMAND scaling)
