@@ -14,7 +14,7 @@ octree_radius_search_benchmark(benchmark::State& state)
     tree.build_tree(/*leaf=*/10);
     
     const double* query = corepoints->row(0).data();
-    double radius = 2.0;  // similar radius as in distances_b.cpp
+    double radius = 2.0;
     
     for (auto _ : state) {
         Octree::RadiusSearchResult result;
