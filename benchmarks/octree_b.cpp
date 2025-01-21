@@ -40,8 +40,29 @@ octree_radius_search_with_distances_benchmark(benchmark::State& state)
     }
 }
 
-// Register benchmarks
+// Multiple query points benchmark
+static void octree_multiple_queries_benchmark(benchmark::State& state) {
+    // Get the test cloud data
+    auto [cloud, corepoints] = ahk_benchcloud();
+    
+    // Create and build the octree
+    Octree tree = Octree::create(*cloud);
+    tree.build_tree(10);
+    
+    // Setup multiple query points (using corepoints)
+    double radius = 2.0;
+    
+    for (auto _ : state) {
+        // Perform radius search for each corepoint
+        for (IndexType i = 0; i < corepoints->rows(); ++i) {
+            Octree::RadiusSearchResult result;
+            tree.radius_search(corepoints->row(i).data(), radius, result);
+        }
+    }
+}
+
 BENCHMARK(octree_radius_search_benchmark)->Unit(benchmark::kMicrosecond);
 BENCHMARK(octree_radius_search_with_distances_benchmark)->Unit(benchmark::kMicrosecond);
+BENCHMARK(octree_multiple_queries_benchmark)->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_MAIN();
