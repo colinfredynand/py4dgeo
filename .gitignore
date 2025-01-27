@@ -52,6 +52,7 @@ __pycache__/
 .Python
 build/
 buildcpy/
+build_ibin/
 develop-eggs/
 dist/
 downloads/
