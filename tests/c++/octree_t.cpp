@@ -1,123 +1,158 @@
-// #include <iostream>
-// #include <array>
-// #include <Eigen/Eigen>
-
-
-// #include "py4dgeo/octree.hpp"
-
-// int main()
-// {
-//   // 1) Create a small 5x3 point cloud in row-major layout
-//   Eigen::Matrix<double, -1, 3, Eigen::RowMajor> data(5,3);
-//   data << 1.0,  1.0,  1.0,
-//           2.0,  2.0,  2.0,
-//           5.0,  5.0,  5.0,
-//           10.0, 10.0, 10.0,
-//           11.0, 10.0,  9.0;
-
-//   // 2) Create the Octree
-//   py4dgeo::Octree tree = py4dgeo::Octree::create(data);
-
-//   // 3) Build the tree with a leaf (node capacity) of 2
-//   tree.build_tree(/*leaf=*/2);
-
-//   // 4) Perform a radius search for points near (2, 2, 2) with radius = 3
-//   std::array<double, 3> query = {2.0, 2.0, 2.0};
-//   double radius = 3.0;
-
-//   // 5) RadiusSearchResult (indices only)
-//   py4dgeo::Octree::RadiusSearchResult indices;
-//   std::size_t found = tree.radius_search(query.data(), radius, indices);
-
-//   std::cout << "[Indices-Only Search]\n";
-//   std::cout << "Found " << found << " points within radius " 
-//             << radius << " of (" << query[0] 
-//             << ", " << query[1] << ", " << query[2] << ").\n";
-//   for (auto idx : indices)
-//   {
-//     std::cout << "  Index: " << idx 
-//               << "  => Point: [" 
-//               << data(idx, 0) << ", " 
-//               << data(idx, 1) << ", " 
-//               << data(idx, 2) << "]\n";
-//   }
-
-//   // 6) RadiusSearchDistanceResult (indices + distances)
-//   py4dgeo::Octree::RadiusSearchDistanceResult distResult;
-//   found = tree.radius_search_with_distances(query.data(), radius, distResult);
-
-//   std::cout << "\n[Indices + Distances Search]\n";
-//   std::cout << "Found " << found << " points within radius " 
-//             << radius << " of (" << query[0] 
-//             << ", " << query[1] << ", " << query[2] << ").\n";
-//   for (auto& p : distResult)
-//   {
-//     auto idx = p.first;
-//     auto dist = p.second;
-//     std::cout << "  Index: " << idx 
-//               << "  Dist: " << dist
-//               << "  => Point: [" 
-//               << data(idx, 0) << ", " 
-//               << data(idx, 1) << ", " 
-//               << data(idx, 2) << "]\n";
-//   }
-
-//   return 0;
-// }
-
-
 #include "catch2/catch.hpp"
 #include "py4dgeo/octree.hpp"
 #include <Eigen/Eigen>
 #include <array>
-#include <iostream>
+#include <random>
 
 using namespace py4dgeo;
 
-TEST_CASE("Octree is correctly built", "[octree]")
-{
-  // 1) Create a small 5x3 point cloud in row-major layout
-  Eigen::Matrix<double, -1, 3, Eigen::RowMajor> data(5,3);
-  data << 1.0,  1.0,  1.0,
-          2.0,  2.0,  2.0,
-          5.0,  5.0,  5.0,
-          10.0, 10.0, 10.0,
-          11.0, 10.0,  9.0;
+TEST_CASE("Octree basic functionality", "[octree]") {
+    // Create test point cloud
+    Eigen::Matrix<double, -1, 3, Eigen::RowMajor> points(5, 3);
+    points << 1.0, 1.0, 1.0,
+              2.0, 2.0, 2.0,
+              5.0, 5.0, 5.0,
+              10.0, 10.0, 10.0,
+              11.0, 10.0, 9.0;
 
-  // 2) Create the Octree
-  Octree tree = Octree::create(data);
+    SECTION("Tree construction with different leaf sizes") {
+        std::vector<int> leafSizes = {2, 4, 8, 16};
+        for(int leafSize : leafSizes) {
+            Octree tree = Octree::create(points);
+            REQUIRE_NOTHROW(tree.build_tree(leafSize));
+            REQUIRE_NOTHROW(tree.invalidate());
+        }
+    }
 
-  // 3) Build the tree with a leaf (node capacity) of 2
-  tree.build_tree(/*leaf=*/2);
+    SECTION("Radius search with different radii") {
+        Octree tree = Octree::create(points);
+        tree.build_tree(2);
 
-  SECTION("Perform radius search")
-  {
-    // 4) Perform a radius search for points near (2, 2, 2) with radius = 3
-    std::array<double, 3> query = {2.0, 2.0, 2.0};
-    double radius = 3.0;
+        std::array<double, 3> query = {2.0, 2.0, 2.0};
+        std::vector<double> radii = {1.0, 3.0, 5.0};
 
-    // 5) RadiusSearchResult (indices only)
-    Octree::RadiusSearchResult indices;
-    auto found = tree.radius_search(query.data(), radius, indices);
-    
-    REQUIRE(found > 0);
-    REQUIRE(indices.size() > 0);
-  }
+        for(double radius : radii) {
+            Octree::RadiusSearchResult results;
+            size_t found = tree.radius_search(query.data(), radius, results);
 
-  SECTION("Perform radius search with distances")
-  {
-    // Query parameters
-    std::array<double, 3> query = {2.0, 2.0, 2.0};
-    double radius = 3.0;
+            REQUIRE(found == results.size());
+            
+            // Verify all points are within radius
+            for(auto idx : results) {
+                Eigen::Vector3d point = points.row(idx);
+                Eigen::Vector3d queryPoint(query[0], query[1], query[2]);
+                double distance = (point - queryPoint).norm();
+                REQUIRE(distance <= radius);
+            }
+        }
+    }
 
-    // 6) RadiusSearchDistanceResult (indices + distances)
-    Octree::RadiusSearchDistanceResult distResult;
-    auto found = tree.radius_search_with_distances(query.data(), radius, distResult);
-    
-    REQUIRE(found > 0);
-    REQUIRE(distResult.size() > 0);
-    REQUIRE(std::is_sorted(distResult.begin(), distResult.end(), [](auto a, auto b) {
-      return a.second < b.second;
-    }));
-  }
+    SECTION("Radius search with distances") {
+        Octree tree = Octree::create(points);
+        tree.build_tree(2);
+
+        std::array<double, 3> query = {2.0, 2.0, 2.0};
+        double radius = 3.0;
+
+        Octree::RadiusSearchDistanceResult results;
+        size_t found = tree.radius_search_with_distances(query.data(), radius, results);
+
+        REQUIRE(found == results.size());
+
+        // Check distances are sorted
+        REQUIRE(std::is_sorted(results.begin(), results.end(),
+                             [](const auto& a, const auto& b) {
+                                 return a.second < b.second;
+                             }));
+
+        // Verify distances are correct
+        for(const auto& result : results) {
+            Eigen::Vector3d point = points.row(result.first);
+            Eigen::Vector3d queryPoint(query[0], query[1], query[2]);
+            double calculatedDist = (point - queryPoint).norm();
+            REQUIRE(std::abs(calculatedDist - result.second) < 1e-10);
+            REQUIRE(calculatedDist <= radius);
+        }
+    }
+}
+
+TEST_CASE("Octree edge cases", "[octree]") {
+    SECTION("Empty point cloud") {
+        Eigen::Matrix<double, 0, 3, Eigen::RowMajor> points;
+        Octree tree = Octree::create(points);
+        REQUIRE_NOTHROW(tree.build_tree(2));
+
+        std::array<double, 3> query = {0.0, 0.0, 0.0};
+        Octree::RadiusSearchResult results;
+        size_t found = tree.radius_search(query.data(), 1.0, results);
+        REQUIRE(found == 0);
+        REQUIRE(results.empty());
+    }
+
+    SECTION("Single point") {
+        Eigen::Matrix<double, 1, 3, Eigen::RowMajor> points;
+        points << 1.0, 1.0, 1.0;
+        
+        Octree tree = Octree::create(points);
+        REQUIRE_NOTHROW(tree.build_tree(2));
+
+        std::array<double, 3> query = {1.0, 1.0, 1.0};
+        Octree::RadiusSearchResult results;
+        
+        // Test exact match
+        size_t found = tree.radius_search(query.data(), 0.1, results);
+        REQUIRE(found == 1);
+        REQUIRE(results.size() == 1);
+        REQUIRE(results[0] == 0);
+    }
+
+    SECTION("Large dataset with random points") {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> dis(-100.0, 100.0);
+
+        const int numPoints = 1000;
+        Eigen::Matrix<double, -1, 3, Eigen::RowMajor> points(numPoints, 3);
+        for(int i = 0; i < numPoints; ++i) {
+            points.row(i) << dis(gen), dis(gen), dis(gen);
+        }
+
+        Octree tree = Octree::create(points);
+        REQUIRE_NOTHROW(tree.build_tree(16));
+
+        // Test multiple random queries
+        for(int i = 0; i < 10; ++i) {
+            std::array<double, 3> query = {dis(gen), dis(gen), dis(gen)};
+            double radius = std::abs(dis(gen)) / 10.0;  // Smaller radius for practical search
+
+            Octree::RadiusSearchDistanceResult results;
+            size_t found = tree.radius_search_with_distances(query.data(), radius, results);
+
+            REQUIRE(found == results.size());
+            REQUIRE(std::is_sorted(results.begin(), results.end(),
+                                 [](const auto& a, const auto& b) {
+                                     return a.second < b.second;
+                                 }));
+
+            // Verify all found points are within radius
+            for(const auto& result : results) {
+                REQUIRE(result.second <= radius);
+            }
+        }
+    }
+
+    SECTION("Zero radius search") {
+        Eigen::Matrix<double, -1, 3, Eigen::RowMajor> points(2, 3);
+        points << 1.0, 1.0, 1.0,
+                 2.0, 2.0, 2.0;
+        
+        Octree tree = Octree::create(points);
+        tree.build_tree(2);
+
+        std::array<double, 3> query = {1.0, 1.0, 1.0};
+        Octree::RadiusSearchResult results;
+        
+        size_t found = tree.radius_search(query.data(), 0.0, results);
+        REQUIRE(found == 1);  // Should only find exact matches
+    }
 }
