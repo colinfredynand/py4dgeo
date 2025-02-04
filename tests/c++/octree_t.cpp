@@ -24,6 +24,15 @@ TEST_CASE("Octree basic functionality", "[octree]") {
         }
     }
 
+    SECTION("Memory pool behavior") {
+        Octree tree = Octree::create(points);
+        // Build and invalidate multiple times to test memory pool
+        for(int i = 0; i < 5; ++i) {
+            REQUIRE_NOTHROW(tree.build_tree(4));
+            REQUIRE_NOTHROW(tree.invalidate());
+        }
+    }
+
     SECTION("Radius search with different radii") {
         Octree tree = Octree::create(points);
         tree.build_tree(2);
@@ -47,7 +56,7 @@ TEST_CASE("Octree basic functionality", "[octree]") {
         }
     }
 
-    SECTION("Radius search with distances") {
+    SECTION("Radius search with distances and block processing") {
         Octree tree = Octree::create(points);
         tree.build_tree(2);
 
@@ -89,7 +98,7 @@ TEST_CASE("Octree edge cases", "[octree]") {
         REQUIRE(results.empty());
     }
 
-    SECTION("Single point") {
+    SECTION("Single point with memory pool") {
         Eigen::Matrix<double, 1, 3, Eigen::RowMajor> points;
         points << 1.0, 1.0, 1.0;
         
@@ -104,9 +113,15 @@ TEST_CASE("Octree edge cases", "[octree]") {
         REQUIRE(found == 1);
         REQUIRE(results.size() == 1);
         REQUIRE(results[0] == 0);
+
+        // Rebuild to test memory pool
+        tree.invalidate();
+        REQUIRE_NOTHROW(tree.build_tree(2));
+        found = tree.radius_search(query.data(), 0.1, results);
+        REQUIRE(found == 1);
     }
 
-    SECTION("Large dataset with random points") {
+    SECTION("Large dataset with random points and block processing") {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_real_distribution<> dis(-100.0, 100.0);
@@ -120,10 +135,10 @@ TEST_CASE("Octree edge cases", "[octree]") {
         Octree tree = Octree::create(points);
         REQUIRE_NOTHROW(tree.build_tree(16));
 
-        // Test multiple random queries
+        // Test multiple random queries with block processing
         for(int i = 0; i < 10; ++i) {
             std::array<double, 3> query = {dis(gen), dis(gen), dis(gen)};
-            double radius = std::abs(dis(gen)) / 10.0;  // Smaller radius for practical search
+            double radius = std::abs(dis(gen)) / 10.0;
 
             Octree::RadiusSearchDistanceResult results;
             size_t found = tree.radius_search_with_distances(query.data(), radius, results);
@@ -134,14 +149,13 @@ TEST_CASE("Octree edge cases", "[octree]") {
                                      return a.second < b.second;
                                  }));
 
-            // Verify all found points are within radius
             for(const auto& result : results) {
                 REQUIRE(result.second <= radius);
             }
         }
     }
 
-    SECTION("Zero radius search") {
+    SECTION("Zero radius search with optimized processing") {
         Eigen::Matrix<double, -1, 3, Eigen::RowMajor> points(2, 3);
         points << 1.0, 1.0, 1.0,
                  2.0, 2.0, 2.0;
