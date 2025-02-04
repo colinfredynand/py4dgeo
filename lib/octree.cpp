@@ -6,15 +6,16 @@ namespace py4dgeo {
 
 Octree::Octree(const EigenPointCloudRef& cloud)
     : cloud_(cloud), leafSize_(32) {
-    nodes.reserve(INITIAL_NODE_CAPACITY);
+    nodes.reserve(INITIAL_NODES);
+    points.reserve(INITIAL_POINTS);
 }
 
 Octree Octree::create(const EigenPointCloudRef& cloud) {
     return Octree(cloud);
 }
 
-Octree::Node* Octree::allocateNode(const Eigen::Vector3d& center, double extent) {
-    nodes.push_back(std::make_unique<Node>(center, extent));
+Octree::Node* Octree::allocateNode(double x, double y, double z, double extent) {
+    nodes.push_back(std::make_unique<Node>(x, y, z, extent));
     return nodes.back().get();
 }
 
@@ -24,72 +25,97 @@ void Octree::build_tree(int leaf) {
     root_ = nullptr;
     
     if (cloud_.rows() == 0) return;
+
+    // Cache all points and create initial index array
+    points.resize(cloud_.rows());
+    std::vector<uint32_t> indices(cloud_.rows());
     
-    // Compute bounding box
-    Eigen::Vector3d min = cloud_.colwise().minCoeff();
-    Eigen::Vector3d max = cloud_.colwise().maxCoeff();
-    Eigen::Vector3d center = (min + max) * 0.5;
-    double extent = (max - min).maxCoeff() * 0.5;
+    #pragma omp parallel for
+    for (int i = 0; i < cloud_.rows(); ++i) {
+        const auto& pt = cloud_.row(i);
+        points[i] = {pt.x(), pt.y(), pt.z(), static_cast<IndexType>(i)};
+        indices[i] = i;
+    }
+    
+    // Compute bounds
+    auto minmax_x = std::minmax_element(points.begin(), points.end(),
+        [](const CachedPoint& a, const CachedPoint& b) { return a.x < b.x; });
+    auto minmax_y = std::minmax_element(points.begin(), points.end(),
+        [](const CachedPoint& a, const CachedPoint& b) { return a.y < b.y; });
+    auto minmax_z = std::minmax_element(points.begin(), points.end(),
+        [](const CachedPoint& a, const CachedPoint& b) { return a.z < b.z; });
+    
+    double min_x = minmax_x.first->x;
+    double max_x = minmax_x.second->x;
+    double min_y = minmax_y.first->y;
+    double max_y = minmax_y.second->y;
+    double min_z = minmax_z.first->z;
+    double max_z = minmax_z.second->z;
+    
+    double cx = (min_x + max_x) * 0.5;
+    double cy = (min_y + max_y) * 0.5;
+    double cz = (min_z + max_z) * 0.5;
+    double extent = std::max({max_x - min_x, max_y - min_y, max_z - min_z}) * 0.5;
+    
     if (extent == 0.0) extent = 1.0;
     
-    // Initialize point indices
-    pointIndices.resize(cloud_.rows());
-    std::iota(pointIndices.begin(), pointIndices.end(), 0);
-    
-    // Create root and build
-    root_ = allocateNode(center, extent);
-    buildRecursive(root_, pointIndices.data(), cloud_.rows());
+    root_ = allocateNode(cx, cy, cz, extent);
+    buildRecursive(root_, indices.data(), cloud_.rows());
 }
 
-void Octree::buildRecursive(Node* node, IndexType* indices, size_t size) {
-    if (size == 0) return;
-
-    if (size <= static_cast<size_t>(leafSize_)) {
-        node->spatial.isLeaf = true;
-        node->spatial.start = indices - pointIndices.data();
-        node->spatial.size = size;
+void Octree::buildRecursive(Node* node, uint32_t* indices, uint32_t count) {
+    if (count <= static_cast<uint32_t>(leafSize_)) {
+        node->isLeaf = 1;
+        node->pointStart = indices - indices;  // Offset from start
+        node->pointCount = count;
         return;
     }
     
-    node->spatial.isLeaf = false;
+    node->isLeaf = 0;
+    
+    // Partition points into octants
+    uint32_t offsets[8] = {0};
+    uint32_t counts[8] = {0};
     
     // Count points per child
-    std::array<size_t, 8> childCounts = {0};
-    for (size_t i = 0; i < size; ++i) {
-        uint32_t code = node->getMortonCode(cloud_.row(indices[i]));
-        ++childCounts[code];
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& pt = points[indices[i]];
+        uint32_t code = node->getMortonCode(pt.x, pt.y, pt.z);
+        ++counts[code];
     }
     
-    // Calculate child offsets
-    std::array<size_t, 8> offsets;
+    // Calculate offsets
     offsets[0] = 0;
     for (int i = 1; i < 8; ++i) {
-        offsets[i] = offsets[i-1] + childCounts[i-1];
+        offsets[i] = offsets[i-1] + counts[i-1];
     }
     
-    // Distribute points
-    std::array<size_t, 8> currentOffsets = offsets;
-    std::vector<IndexType> tempIndices(size);
-    for (size_t i = 0; i < size; ++i) {
-        const IndexType idx = indices[i];
-        uint32_t code = node->getMortonCode(cloud_.row(idx));
-        tempIndices[currentOffsets[code]++] = idx;
+    // Partition points
+    std::vector<uint32_t> temp(count);
+    uint32_t curr_offsets[8];
+    std::copy(offsets, offsets + 8, curr_offsets);
+    
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t idx = indices[i];
+        const auto& pt = points[idx];
+        uint32_t code = node->getMortonCode(pt.x, pt.y, pt.z);
+        temp[curr_offsets[code]++] = idx;
     }
-    std::copy(tempIndices.begin(), tempIndices.end(), indices);
+    
+    std::copy(temp.begin(), temp.end(), indices);
     
     // Create children
-    const double childExtent = node->spatial.extent * 0.5;
+    double half_extent = node->extent * 0.5;
     for (int i = 0; i < 8; ++i) {
-        if (childCounts[i] == 0) continue;
+        if (counts[i] == 0) continue;
         
-        Eigen::Vector3d childCenter(node->spatial.x, node->spatial.y, node->spatial.z);
-        childCenter[0] += ((i & 1) ? childExtent : -childExtent);
-        childCenter[1] += ((i & 2) ? childExtent : -childExtent);
-        childCenter[2] += ((i & 4) ? childExtent : -childExtent);
+        double cx = node->x + ((i & 1) ? half_extent : -half_extent);
+        double cy = node->y + ((i & 2) ? half_extent : -half_extent);
+        double cz = node->z + ((i & 4) ? half_extent : -half_extent);
         
-        node->children[i] = allocateNode(childCenter, childExtent);
-        node->spatial.childMask |= (1 << i);
-        buildRecursive(node->children[i], indices + offsets[i], childCounts[i]);
+        node->children[i] = allocateNode(cx, cy, cz, half_extent);
+        node->childMask |= (1 << i);
+        buildRecursive(node->children[i], indices + offsets[i], counts[i]);
     }
 }
 
@@ -99,42 +125,39 @@ std::size_t Octree::radius_search(const double* querypoint,
     result.clear();
     if (!root_ || radius < 0.0) return 0;
 
-    const Eigen::Vector3d query = Eigen::Map<const Eigen::Vector3d>(querypoint);
+    const double qx = querypoint[0];
+    const double qy = querypoint[1];
+    const double qz = querypoint[2];
     const double sqRadius = radius * radius;
     
-    // Fixed-size stack on actual stack
-    std::array<const Node*, STACK_SIZE> stack;
-    int stackSize = 1;
+    Node* stack[STACK_SIZE];
+    int stack_size = 1;
     stack[0] = root_;
     
     result.reserve(leafSize_ * 2);
 
-    while (stackSize > 0) {
-        const Node* node = stack[--stackSize];
+    while (stack_size > 0) {
+        Node* node = stack[--stack_size];
+        
+        if (!node->intersectsSphere(qx, qy, qz, radius)) continue;
 
-        if (!node->intersectsSphere(query, radius)) continue;
-
-        if (node->spatial.isLeaf) {
-            const IndexType* indices = pointIndices.data() + node->spatial.start;
-            const size_t count = node->spatial.size;
-            
-            // Process points
-            for (size_t i = 0; i < count; ++i) {
-                const IndexType idx = indices[i];
-                const auto& point = cloud_.row(idx);
-                const double dx = point.x() - query.x();
-                const double dy = point.y() - query.y();
-                const double dz = point.z() - query.z();
-                if (dx*dx + dy*dy + dz*dz <= sqRadius) {
-                    result.push_back(idx);
+        if (node->isLeaf) {
+            uint32_t end = node->pointStart + node->pointCount;
+            for (uint32_t i = node->pointStart; i < end; ++i) {
+                const auto& pt = points[i];
+                double dx = pt.x - qx;
+                double dy = pt.y - qy;
+                double dz = pt.z - qz;
+                double sqDist = dx*dx + dy*dy + dz*dz;
+                if (sqDist <= sqRadius) {
+                    result.push_back(pt.idx);
                 }
             }
         } else {
-            // Add children in reverse order
-            uint8_t mask = node->spatial.childMask;
-            while (mask && stackSize < STACK_SIZE) {
+            uint8_t mask = node->childMask;
+            while (mask && stack_size < STACK_SIZE) {
                 int idx = 31 - __builtin_clz(mask);
-                stack[stackSize++] = node->children[idx];
+                stack[stack_size++] = node->children[idx];
                 mask &= ~(1 << idx);
             }
         }
@@ -149,40 +172,39 @@ std::size_t Octree::radius_search_with_distances(const double* querypoint,
     result.clear();
     if (!root_ || radius < 0.0) return 0;
 
-    const Eigen::Vector3d query = Eigen::Map<const Eigen::Vector3d>(querypoint);
+    const double qx = querypoint[0];
+    const double qy = querypoint[1];
+    const double qz = querypoint[2];
     const double sqRadius = radius * radius;
     
-    std::array<const Node*, STACK_SIZE> stack;
-    int stackSize = 1;
+    Node* stack[STACK_SIZE];
+    int stack_size = 1;
     stack[0] = root_;
     
     result.reserve(leafSize_ * 2);
 
-    while (stackSize > 0) {
-        const Node* node = stack[--stackSize];
+    while (stack_size > 0) {
+        Node* node = stack[--stack_size];
+        
+        if (!node->intersectsSphere(qx, qy, qz, radius)) continue;
 
-        if (!node->intersectsSphere(query, radius)) continue;
-
-        if (node->spatial.isLeaf) {
-            const IndexType* indices = pointIndices.data() + node->spatial.start;
-            const size_t count = node->spatial.size;
-            
-            for (size_t i = 0; i < count; ++i) {
-                const IndexType idx = indices[i];
-                const auto& point = cloud_.row(idx);
-                const double dx = point.x() - query.x();
-                const double dy = point.y() - query.y();
-                const double dz = point.z() - query.z();
-                const double sqDist = dx*dx + dy*dy + dz*dz;
+        if (node->isLeaf) {
+            uint32_t end = node->pointStart + node->pointCount;
+            for (uint32_t i = node->pointStart; i < end; ++i) {
+                const auto& pt = points[i];
+                double dx = pt.x - qx;
+                double dy = pt.y - qy;
+                double dz = pt.z - qz;
+                double sqDist = dx*dx + dy*dy + dz*dz;
                 if (sqDist <= sqRadius) {
-                    result.push_back({idx, std::sqrt(sqDist)});
+                    result.push_back({pt.idx, std::sqrt(sqDist)});
                 }
             }
         } else {
-            uint8_t mask = node->spatial.childMask;
-            while (mask && stackSize < STACK_SIZE) {
+            uint8_t mask = node->childMask;
+            while (mask && stack_size < STACK_SIZE) {
                 int idx = 31 - __builtin_clz(mask);
-                stack[stackSize++] = node->children[idx];
+                stack[stack_size++] = node->children[idx];
                 mask &= ~(1 << idx);
             }
         }
@@ -196,16 +218,8 @@ std::size_t Octree::radius_search_with_distances(const double* querypoint,
 
 void Octree::invalidate() {
     nodes.clear();
-    pointIndices.clear();
+    points.clear();
     root_ = nullptr;
-}
-
-std::ostream& Octree::saveIndex(std::ostream& stream) const {
-    return stream;
-}
-
-std::istream& Octree::loadIndex(std::istream& stream) {
-    return stream;
 }
 
 } // namespace py4dgeo

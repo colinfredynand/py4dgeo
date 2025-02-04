@@ -15,6 +15,11 @@ public:
     using RadiusSearchDistanceResult = std::vector<std::pair<IndexType, double>>;
     using EigenPointCloudRef = Eigen::Ref<const Eigen::Matrix<double, -1, 3, Eigen::RowMajor>>;
 
+    struct CachedPoint {
+        double x, y, z;
+        IndexType idx;
+    };
+
     static Octree create(const EigenPointCloudRef& cloud);
     void build_tree(int leaf);
     std::size_t radius_search(const double* querypoint,
@@ -24,66 +29,51 @@ public:
                                            double radius,
                                            RadiusSearchDistanceResult& result) const;
     void invalidate();
-    std::ostream& saveIndex(std::ostream& stream) const;
-    std::istream& loadIndex(std::istream& stream);
 
 private:
     explicit Octree(const EigenPointCloudRef& cloud);
 
-    // Cache-optimized node structure
+    // Ultra-compact node structure
     struct alignas(32) Node {
-        // Packed spatial data for better cache line usage
-        struct alignas(16) SpatialData {
-            double x, y, z;  // Center coordinates
-            double extent;
-            uint32_t start;  // Start index in points array
-            uint32_t size;   // Number of points
-            uint8_t childMask;
-            bool isLeaf;
-            uint16_t padding;  // Maintain alignment
-        } spatial;
+        // Spatial data packed tightly
+        double x, y, z, extent;  // 32 bytes
+        uint32_t pointStart;     // 4 bytes
+        uint16_t pointCount;     // 2 bytes
+        uint8_t childMask;       // 1 byte
+        uint8_t isLeaf;         // 1 byte
+        Node* children[8];       // 64 bytes
 
-        // Separate child pointers to avoid false sharing
-        alignas(32) std::array<Node*, 8> children{};
-
-        Node() = default;
-        Node(const Eigen::Vector3d& c, double e) {
-            spatial.x = c.x();
-            spatial.y = c.y();
-            spatial.z = c.z();
-            spatial.extent = e;
-            spatial.start = 0;
-            spatial.size = 0;
-            spatial.childMask = 0;
-            spatial.isLeaf = true;
+        Node(double cx, double cy, double cz, double e)
+            : x(cx), y(cy), z(cz), extent(e), pointStart(0), 
+              pointCount(0), childMask(0), isLeaf(1) {
+            std::fill(children, children + 8, nullptr);
         }
 
-        // Fast Morton code computation
-        inline uint32_t getMortonCode(const Eigen::Vector3d& point) const {
-            return ((point.x() > spatial.x) ? 1 : 0) |
-                   ((point.y() > spatial.y) ? 2 : 0) |
-                   ((point.z() > spatial.z) ? 4 : 0);
+        // Optimized intersection test using scalar math
+        inline bool intersectsSphere(double qx, double qy, double qz, double radius) const {
+            double dx = std::abs(qx - x);
+            double dy = std::abs(qy - y);
+            double dz = std::abs(qz - z);
+            double maxDist = std::max({dx, dy, dz});
+            return maxDist <= extent + radius;
         }
 
-        // Fast distance check
-        inline bool intersectsSphere(const Eigen::Vector3d& query, double radius) const {
-            double dx = std::abs(query.x() - spatial.x);
-            double dy = std::abs(query.y() - spatial.y);
-            double dz = std::abs(query.z() - spatial.z);
-            return std::max({dx, dy, dz}) <= spatial.extent + radius;
+        // Fast Morton code using scalar operations
+        inline uint32_t getMortonCode(double px, double py, double pz) const {
+            return ((px > x) ? 1 : 0) |
+                   ((py > y) ? 2 : 0) |
+                   ((pz > z) ? 4 : 0);
         }
-
-        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     };
 
-    // Memory and data management
+    // Memory management
     std::vector<std::unique_ptr<Node>> nodes;
-    std::vector<IndexType> pointIndices;  // Contiguous storage for all point indices
+    std::vector<CachedPoint> points;  // Cache points for faster access
     Node* root_{nullptr};
 
-    // Tree building helpers
-    Node* allocateNode(const Eigen::Vector3d& center, double extent);
-    void buildRecursive(Node* node, IndexType* indices, size_t size);
+    // Helper methods
+    Node* allocateNode(double x, double y, double z, double extent);
+    void buildRecursive(Node* node, uint32_t* indices, uint32_t count);
 
     // Member variables
     EigenPointCloudRef cloud_;
@@ -91,7 +81,8 @@ private:
 
     // Constants
     static constexpr size_t STACK_SIZE = 32;
-    static constexpr size_t INITIAL_NODE_CAPACITY = 1024;
+    static constexpr size_t INITIAL_POINTS = 1024;
+    static constexpr size_t INITIAL_NODES = 128;
 };
 
 } // namespace py4dgeo
