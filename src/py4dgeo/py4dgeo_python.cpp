@@ -265,6 +265,74 @@ PYBIND11_MODULE(_py4dgeo, m)
         &compute_correspondence_distances,
         "Compute correspondence distances");
 
+  //====================================================
+  // Expose the Octree class
+  py::class_<Octree> octree(m, "Octree", py::buffer_protocol());
+
+  // Map __init__ to constructor
+  octree.def(py::init<>(&Octree::create));
+
+  // Allow updating Octree from a given file
+  octree.def("load_index", [](Octree& self, std::string filename) {
+    std::ifstream stream(filename, std::ios::binary | std::ios::in);
+    self.loadIndex(stream);
+  });
+
+  // Allow dumping Octree to a file
+  octree.def("save_index", [](const Octree& self, std::string filename) {
+    std::ofstream stream(filename, std::ios::binary | std::ios::out);
+    self.saveIndex(stream);
+  });
+
+  // Allow building the Octree structure
+  octree.def(
+    "build_tree", &Octree::build_tree, "Trigger building the search tree"
+  );
+
+  // Allow invalidating the Octree structure
+  octree.def("invalidate", &Octree::invalidate, "Invalidate the search tree");
+
+  // Add all the radius search methods
+  octree.def(
+    "radius_search",
+    [](const Octree& self, py::array_t<double> qp, double radius) {
+      // Get a pointer for the query point
+      auto ptr = static_cast<const double*>(qp.request().ptr);
+
+      Octree::RadiusSearchResult result;
+      self.radius_search(ptr, radius, result);
+
+      return as_pyarray(std::move(result));
+    },
+    "Search point in given radius!"
+  );
+
+  octree.def(
+    "radius_search_with_distances",
+    [](const Octree& self, py::array_t<double> qp, double radius) {
+      // Get a pointer for the query point
+      auto ptr = static_cast<const double*>(qp.request().ptr);
+
+      Octree::RadiusSearchDistanceResult result;
+      self.radius_search_with_distances(ptr, radius, result);
+
+      py::array_t<long int> indices_array(result.size());
+      py::array_t<double> distances_array(result.size());
+
+      auto indices_array_ptr = indices_array.mutable_data();
+      auto distances_array_ptr = distances_array.mutable_data();
+
+      for (size_t i = 0; i < result.size(); ++i) {
+        *indices_array_ptr++ = result[i].first;
+        *distances_array_ptr++ = result[i].second;
+      }
+
+      return std::make_pair(indices_array, distances_array);
+    },
+    "Search point in given radius and return distances!"
+  );
+  //======================================================
+
   // Callback parameter structs
   py::class_<WorkingSetFinderParameters> ws_params(
     m, "WorkingSetFinderParameters");
