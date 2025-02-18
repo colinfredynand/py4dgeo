@@ -9,7 +9,7 @@ static void octree_radius_search_benchmark(benchmark::State& state) {
     auto [cloud, corepoints] = ahk_benchcloud();
     
     Octree tree = Octree::create(*cloud);
-    tree.build_tree(32);
+    tree.build_tree(8);
     
     std::array<double, 3> querypoint{0.0, 0.0, 0.0};
     Octree::RadiusSearchResult result;
@@ -25,7 +25,7 @@ static void octree_radius_search_distances_benchmark(benchmark::State& state) {
     auto [cloud, corepoints] = ahk_benchcloud();
     
     Octree tree = Octree::create(*cloud);
-    tree.build_tree(32);
+    tree.build_tree(8);
     
     std::array<double, 3> querypoint{0.0, 0.0, 0.0};
     Octree::RadiusSearchDistanceResult result;
