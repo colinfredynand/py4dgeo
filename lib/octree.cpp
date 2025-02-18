@@ -150,7 +150,10 @@ std::size_t Octree::radius_search(const double* querypoint,
                 double dz = pt.z - qz;
                 double sqDist = dx*dx + dy*dy + dz*dz;
                 if (sqDist <= sqRadius) {
-                    result.push_back(pt.idx);
+                   // result.push_back(pt.idx);
+                   if (std::find(result.begin(), result.end(), pt.idx) == result.end()) {
+                        result.push_back(pt.idx);
+                    }
                 }
             }
         } else {
@@ -197,7 +200,15 @@ std::size_t Octree::radius_search_with_distances(const double* querypoint,
                 double dz = pt.z - qz;
                 double sqDist = dx*dx + dy*dy + dz*dz;
                 if (sqDist <= sqRadius) {
-                    result.push_back({pt.idx, std::sqrt(sqDist)});
+                    // result.push_back({pt.idx, std::sqrt(sqDist)});
+                    // Only insert if not already in result
+                    if (std::find_if(result.begin(), result.end(), 
+                        [&](const auto& r) { return r.first == pt.idx; }) 
+                        == result.end()) 
+                            {
+                                result.push_back({pt.idx, sqDist});
+                                // result.push_back({pt.idx, std::sqrt(sqDist)});
+                            }
                 }
             }
         } else {

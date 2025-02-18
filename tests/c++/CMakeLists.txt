@@ -21,3 +21,7 @@ target_link_libraries(tests PUBLIC py4dgeo py4dgeo_test Catch2::Catch2)
 
 # allow user to run tests with `make test` or `ctest`
 catch_discover_tests(tests)
+
+add_executable(octree_kdtree_c octree_kdtree_c.cpp)
+
+target_link_libraries(octree_kdtree_c PUBLIC py4dgeo py4dgeo_test)
