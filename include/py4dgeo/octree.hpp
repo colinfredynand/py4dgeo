@@ -5,6 +5,7 @@
 #include <vector>
 #include <cmath>
 #include <array>
+#include <algorithm>
 
 namespace py4dgeo {
 
@@ -23,11 +24,11 @@ public:
     static Octree create(const EigenPointCloudRef& cloud);
     void build_tree(int leaf);
     std::size_t radius_search(const double* querypoint,
-                             double radius,
-                             RadiusSearchResult& result) const;
+                              double radius,
+                              RadiusSearchResult& result) const;
     std::size_t radius_search_with_distances(const double* querypoint,
-                                           double radius,
-                                           RadiusSearchDistanceResult& result) const;
+                                             double radius,
+                                             RadiusSearchDistanceResult& result) const;
     void invalidate();
 
 private:
@@ -35,21 +36,21 @@ private:
 
     // Ultra-compact node structure
     struct alignas(32) Node {
-        // Spatial data packed tightly
-        double x, y, z, extent;  // 32 bytes
-        uint32_t pointStart;     // 4 bytes
-        uint16_t pointCount;     // 2 bytes
-        uint8_t childMask;       // 1 byte
-        uint8_t isLeaf;         // 1 byte
-        Node* children[8];       // 64 bytes
+        double x, y, z, extent;  // Center and half edge length.
+        uint32_t pointStart;     // Offset into points array (for leaf nodes).
+        uint16_t pointCount;     // Number of points in the leaf.
+        uint8_t childMask;       // Bitmask indicating which children exist.
+        uint8_t isLeaf;          // 1 if leaf, 0 otherwise.
+        Node* children[8];       // Raw pointers to children.
 
         Node(double cx, double cy, double cz, double e)
-            : x(cx), y(cy), z(cz), extent(e), pointStart(0), 
-              pointCount(0), childMask(0), isLeaf(1) {
-            std::fill(children, children + 8, nullptr);
+            : x(cx), y(cy), z(cz), extent(e),
+              pointStart(0), pointCount(0),
+              childMask(0), isLeaf(1) {
+            std::fill(std::begin(children), std::end(children), nullptr);
         }
 
-        // Optimized intersection test using scalar math
+        // Check if the node's axis-aligned bounding box intersects a sphere.
         inline bool intersectsSphere(double qx, double qy, double qz, double radius) const {
             double dx = std::abs(qx - x);
             double dy = std::abs(qy - y);
@@ -58,7 +59,7 @@ private:
             return maxDist <= extent + radius;
         }
 
-        // Fast Morton code using scalar operations
+        // Compute a Morton code (0-7) for a point relative to this node.
         inline uint32_t getMortonCode(double px, double py, double pz) const {
             return ((px > x) ? 1 : 0) |
                    ((py > y) ? 2 : 0) |
@@ -68,10 +69,10 @@ private:
 
     // Memory management
     std::vector<std::unique_ptr<Node>> nodes;
-    std::vector<CachedPoint> points;  // Cache points for faster access
+    std::vector<CachedPoint> points;  // Cached points for faster access.
     Node* root_{nullptr};
 
-    // Helper methods
+    // Helper functions
     Node* allocateNode(double x, double y, double z, double extent);
     void buildRecursive(Node* node, uint32_t* indices, uint32_t count);
 
@@ -83,6 +84,15 @@ private:
     static constexpr size_t STACK_SIZE = 32;
     static constexpr size_t INITIAL_POINTS = 1024;
     static constexpr size_t INITIAL_NODES = 128;
+
+    // Portable helper: Returns the index of the highest set bit in an 8-bit value.
+    static inline int highestSetBit(uint8_t x) {
+        for (int i = 7; i >= 0; --i) {
+            if (x & (1 << i))
+                return i;
+        }
+        return -1;
+    }
 };
 
 } // namespace py4dgeo
